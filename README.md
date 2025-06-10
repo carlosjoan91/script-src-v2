@@ -89,7 +89,7 @@ The only existing mechanism to use eval or eval-like functions (Function, and st
 
 ### Introduce new url-hashes keyword to cover script-src attributes
 
-Currently, if the CSP header is set, scripts loaded via script-src need to be allowlisted, which can only be done through [nonces](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy#nonce-nonce_value) or SRI. This proposes adding a mechanism to allowlist individual URLs (the initial URL, without following redirects, since following redirects would cause a XSLeak, by exposing whether the URL triggers a redirect) via their hash by including their hash (prefixed with url-<hashalgorithm>) in script-src. URL hashes would support both absolute and relative URLs, e.g.:
+Currently, if the CSP header is set, scripts loaded via script-src need to be allowlisted, which can only be done through [nonces](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy#nonce-nonce_value), SRI, or hostname sourcelists. This proposes adding a mechanism to allowlist individual URLs (the initial URL, without following redirects, since following redirects would cause a XSLeak, by exposing whether the URL triggers a redirect) via their hash by including their hash (prefixed with url-<hashalgorithm>) in script-src. URL hashes would support both absolute and relative URLs, e.g.:
 
 
 ```
@@ -110,10 +110,10 @@ Content-Security-Policy: script-src 'url-sha256-SHA256("script.js")';
 
 ### Extend script hashes to cover eval and eval-like functions
 
-Similarly, scripts run within eval() currently can only be allowed via unsafe-eval, which allows any script, with no mechanism to allowlist only specific ones. This proposes that script hashes should cover scripts loaded via eval (Function, or string literals in setTimeout, setInterval, and setImmediate), in addition to inline scripts, e.g. given a CSP of `script-src 'eval-sha256-SHA256(foo)'; `permitting `eval(foo);`
+Similarly, scripts run within eval() currently can only be allowed via unsafe-eval, which allows any script, with no mechanism to allowlist only specific ones. This proposes that script hashes should cover scripts loaded via eval (Function, or string literals in setTimeout, setInterval, and setImmediate), in addition to inline scripts, e.g. given a CSP of `script-src 'eval-sha256-SHA256(foo)';` permitting `eval(foo);`
 
 
-Prefixes in hashes are necessary to distinguish these from existing hashes supported in script-src. This is useful to prevent scripts from also being unintentionally allowlisted as inline scripts, and is also required to implement backwards compatiblity (so browsers that understand the new features can detect when they are being used).
+Prefixes in hashes are necessary to distinguish these from existing hashes supported in script-src. This is useful to prevent scripts from also being unintentionally allowlisted as inline scripts, and is also required to implement backwards compatibility (so browsers that understand the new features can detect when they are being used).
 
 
 ### Add hashes to CSP reporting
@@ -139,16 +139,18 @@ eval("console.log('Hello World')");
 ```
 
 
-For URL hashes, a similar approach can be followed. Browsers that support the new features can ignore host based allowlisiting if a URL hash is present. Unlike eval though, this leaves some open questions about interactions with other directives, notably `strict-dynamic`. A common fallback for sites that use URL hashes would be to include `https:` in the fallback policy. However sites might require `strict-dynamic` in order to use URL hashes, and they can't set a policy like `script-src https: strict-dynamic, url-sha256-<hash>` since in older browsers `strict-dynamic` would cause `https:` to be [ignored](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/script-src#strict-dynamic). This can be solved by either:
+For URL hashes, a similar approach can be followed. Browsers that support the new features can ignore host based allowlisiting if a URL hash is present. Unlike eval though, this leaves some open questions about interactions with other directives, notably `strict-dynamic`. A common fallback for sites that use URL hashes would be to include `https:` in the fallback policy. However sites might require `strict-dynamic` in order to use URL hashes, and they can't set a policy like `script-src https: strict-dynamic, url-sha256-<hash>` since `strict-dynamic` would cause `https:` to be [ignored](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/script-src#strict-dynamic). This can be solved by either:
 
 - Adding a new keyword that enables strict-dynamic like behavior for URL hashes, but is ignored in older browsers, e.g. `strict-dynamic-hashes`.
+  -e.g.: For a site that needs `https: 'unsafe-inline'` in older browsers and `'strict-dynamic-hashes' 'url-sha256(example.com/script.js)'` in browsers that support hashes, it can set `https: 'unsafe-inline' 'strict-dynamic-hashes' 'url-sha256(example.com/script.js)'` as its policy. Older browsers will ignore `strict-dynamic-hashes` and the url hash, while newer browsers will ignore `https:` due to the presence of a hash and `unsafe-inline` due to the presence of `strict-dynamic-hashes`.
 - Having the presence of URL hashes imply strict-dynamic, so the keyword is not necessary. This would be the easiest behavior to explain, but it means that sites using hashes lose the option to disable `strict-dynamic` behavior, so sites that don't need it, but want to use URL hashes have a policy that is more lax than they really need.
+  -If implemented this way, strict-dynamic behavior could also be limited to scripts loaded via a hashed URL.
 - Having the presence of URL hashes imply strict-dynamic, and providing an opt-out keyword, e.g. `no-strict-dynamic-hashes`.
 
 #### Implement the new features as a completely new directive
 The new features can be implemented as part of a separate directive (e.g. `script-src-v2`) that completely replaces `script-src` if it's set. This has the advantage of making the policy easier to read since it's immediately obvious what applies in browsers that are compatible with the new features, and what is the fallback for browsers that are not. On the other hand, the main drawback to this approach is that moves the complexity to the [fallback algorithm](https://www.w3.org/TR/CSP3/#directive-fallback-list).
 
-Both `script-src-elem` and `script-src-attr` fallback directly to `script-src` so they can be handled by either introducing a replacement that supports the new features and replaces the other one if set(e.g. `script-src-elem-v2`), or by completely ignoring them if they are set.
+Both `script-src-elem` and `script-src-attr` fallback directly to `script-src` so they can be handled by either introducing a replacement that supports the new features and replaces the other one if set(e.g. `script-src-elem-v2`), or by completely ignoring them if `script-src-v2` is set.
 
 `worker-src`, `child-src`, and `default-src` interact with `script-src`, but also with other directives, so adding a "v2" version of them leads to an overly complicated algorithm. Alternatively we can add support for url hashes directly on these directives, but that means the only way to have a backup policy for browsers that don't support them, is to not rely on the fallback algorithm and use `script-src` directly. Finally, we can also choose to not support the new features in these, but this leads to a scenario where sites that want to use URL hashes for workers have to *not* set `worker-src` and are forced to rely on the fallback to `script-src`
 
